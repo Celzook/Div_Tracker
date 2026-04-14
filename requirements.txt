@@ -1,0 +1,10 @@
+setuptools>=69.0
+requests
+pandas>=1.5
+numpy
+openpyxl
+tqdm
+yfinance
+streamlit
+plotly
+lxml
