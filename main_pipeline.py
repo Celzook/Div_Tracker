@@ -25,7 +25,7 @@ from config_dividend import (
 from dividend_collector import (
     DividendCollector, validate_gate, validate_phase3,
 )
-from trailing_yield import TrailingYieldCalculator, validate_phase4
+from trailing_yield import TrailingYieldCalculator, validate_phase4, calc_etf_trailing_yield
 from portfolio_builder import PortfolioBuilder, validate_phase5
 from buy_strategy import BuyStrategy, validate_phase6
 
@@ -34,15 +34,14 @@ def run_phase1(base_date):
     print("\n" + "=" * 60)
     print(" Phase 1: 배당/고배당 ETF 필터링")
     print("=" * 60)
-    df = step1_get_tickers_and_names(base_date)
-    if df.empty:
+    df_all = step1_get_tickers_and_names(base_date)
+    if df_all.empty:
         return pd.DataFrame(), pd.DataFrame()
-    df = step2_type_filter_and_classify(df)
-    df_div = df[df['대카테고리'] == '배당/인컴'].copy()
+    df_all = step2_type_filter_and_classify(df_all)
+    df_div = df_all[df_all['대카테고리'] == '배당/인컴'].copy()
     print(f"\n  → 배당/인컴 ETF: {len(df_div)}개")
 
     cc_kw = ['커버드콜', 'COVERED CALL', 'COVERED']
-    df_all = step1_get_tickers_and_names(base_date)
     cc = df_all[df_all['ETF명'].str.upper().apply(
         lambda x: any(k.upper() in x for k in cc_kw))]
     print(f"  → 커버드콜 참고: {len(cc)}개")
@@ -93,7 +92,7 @@ def run_phase2(df_etfs, name_to_code, base_date):
     return holdings_dict, us
 
 
-def save_outputs(df_etfs, df_cc, holdings, us, df_div, df_yield,
+def save_outputs(df_etfs, df_cc, holdings, us, df_div, df_yield, df_etf_yield,
                  port_res, port_sum, diag, bt, gate_log):
     d = Config.OUTPUT_DIR; os.makedirs(d, exist_ok=True)
     print(f"\n  산출물 → {d}")
@@ -106,7 +105,15 @@ def save_outputs(df_etfs, df_cc, holdings, us, df_div, df_yield,
                                 values='주당배당금_수정', aggfunc='first')
         pv.to_excel(f"{d}/03_배당금_이력.xlsx")
     if df_yield is not None and not df_yield.empty:
-        df_yield.to_excel(f"{d}/04_trailing_수익률.xlsx", index=False)
+        with pd.ExcelWriter(f"{d}/04_trailing_수익률.xlsx") as w:
+            df_yield.to_excel(w, sheet_name='종목별', index=False)
+            if df_etf_yield is not None and not df_etf_yield.empty:
+                df_etf_yield.to_excel(w, sheet_name='ETF별', index=False)
+                # ETF별 최신 수익률 요약
+                latest = df_etf_yield.loc[
+                    df_etf_yield.groupby('ETF티커')['기준월'].idxmax()
+                ].sort_values('ETF_Trailing수익률', ascending=False)
+                latest.to_excel(w, sheet_name='ETF_최신', index=False)
     if port_res:
         with pd.ExcelWriter(f"{d}/05_포트폴리오_비교.xlsx") as w:
             for m, (dp, _) in port_res.items(): dp.to_excel(w, sheet_name=m, index=False)
@@ -162,12 +169,22 @@ def run_pipeline():
     g3 = validate_phase3(df_div_t)
     gate_log.append(f"Phase 3: {df_div_t['종목코드'].nunique()}개 — {'PASS' if g3 else 'FAIL'}")
 
-    # Phase 4
+    # Phase 4: 종목별 Trailing 수익률
     calc = TrailingYieldCalculator(df_div_t)
     calc.fetch_prices(df_div_t['종목코드'].unique().tolist(), base_date)
     df_yield = calc.calc_all(df_div_t['종목코드'].unique().tolist())
     g4 = validate_phase4(df_yield)
     gate_log.append(f"Phase 4: {'PASS' if g4 else 'FAIL'}")
+
+    # Phase 4-B: ETF 레벨 Trailing 수익률 (구성종목 비중 가중평균)
+    print("\n" + "=" * 60)
+    print(" Phase 4-B: ETF Trailing 배당수익률 집계")
+    print("=" * 60)
+    df_etf_yield = calc_etf_trailing_yield(holdings, df_yield)
+    if not df_etf_yield.empty:
+        gate_log.append(f"Phase 4-B: ETF {df_etf_yield['ETF티커'].nunique()}개 PASS")
+    else:
+        gate_log.append("Phase 4-B: ETF 수익률 집계 결과 없음")
 
     # Phase 5
     builder = PortfolioBuilder(df_yield, df_div_t)
@@ -187,7 +204,7 @@ def run_pipeline():
     gate_log.append(f"Phase 6: {'PASS' if g6 else 'FAIL'}")
 
     # Save
-    save_outputs(df_etfs, df_cc, holdings, us, df_div_t, df_yield,
+    save_outputs(df_etfs, df_cc, holdings, us, df_div_t, df_yield, df_etf_yield,
                  port_res, port_sum, diag, bt, gate_log)
 
     elapsed = time.time() - t0

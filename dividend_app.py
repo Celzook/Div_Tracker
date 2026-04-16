@@ -31,7 +31,7 @@ from config_dividend import (
 from dividend_collector import (
     DividendCollector, krx_get_dividend_data, adjust_dividend,
 )
-from trailing_yield import TrailingYieldCalculator
+from trailing_yield import TrailingYieldCalculator, calc_etf_trailing_yield
 from portfolio_builder import PortfolioBuilder
 from buy_strategy import BuyStrategy
 
@@ -54,6 +54,7 @@ DEFAULTS = {
     'df_dividend': None,
     # Phase 4
     'df_yield': None,
+    'df_etf_yield': None,
     # Phase 5
     'port_results': None,
     'port_summary': None,
@@ -456,45 +457,78 @@ def render_phase4():
         with st.spinner("Trailing 수익률 계산 중..."):
             df_yield = calc.calc_all(codes)
 
+        # ETF 레벨 Trailing 수익률 (구성종목 비중 가중평균)
+        holdings_dict = st.session_state.holdings_dict
+        df_etf_yield = pd.DataFrame()
+        if holdings_dict and not df_yield.empty:
+            with st.spinner("ETF Trailing 수익률 집계 중..."):
+                df_etf_yield = calc_etf_trailing_yield(holdings_dict, df_yield)
+
         st.session_state.df_yield = df_yield
+        st.session_state.df_etf_yield = df_etf_yield
 
     df_yield = st.session_state.df_yield
+    df_etf_yield = st.session_state.df_etf_yield
+
     if df_yield is not None and not df_yield.empty:
         n_stocks = df_yield['종목코드'].nunique()
         st.success(f"✅ **{n_stocks}개** 종목 Trailing 수익률 시계열")
 
-        # 종목 선택 차트
-        stock_options = df_yield.groupby('종목코드').first().reset_index()
-        if '종목명' in stock_options.columns:
-            options = stock_options[['종목코드', '종목명']].values.tolist()
-            labels = [f"{c} {n}" for c, n in options]
-        else:
-            labels = stock_options['종목코드'].tolist()
-            options = [[c, c] for c in labels]
+        tab_stock, tab_etf = st.tabs(["📈 종목별 수익률", "🏦 ETF별 Trailing 수익률"])
 
-        selected = st.multiselect("차트에 표시할 종목", labels, default=labels[:5])
+        with tab_stock:
+            # 종목 선택 차트
+            stock_options = df_yield.groupby('종목코드').first().reset_index()
+            if '종목명' in stock_options.columns:
+                options = stock_options[['종목코드', '종목명']].values.tolist()
+                labels = [f"{c} {n}" for c, n in options]
+            else:
+                labels = stock_options['종목코드'].tolist()
 
-        if selected:
-            fig = go.Figure()
-            for label in selected:
-                code = label.split()[0]
-                sub = df_yield[df_yield['종목코드'] == code]
-                fig.add_trace(go.Scatter(
-                    x=sub['기준월'], y=sub['Trailing수익률'],
-                    name=label, mode='lines',
-                ))
-            fig.update_layout(
-                height=450, yaxis_title="Trailing 수익률 (%)",
-                legend=dict(orientation="h", yanchor="bottom", y=1.02),
-                margin=dict(l=0, r=0, t=40, b=0),
-            )
-            st.plotly_chart(fig, use_container_width=True)
+            selected = st.multiselect("차트에 표시할 종목", labels, default=labels[:5])
+            if selected:
+                fig = go.Figure()
+                for label in selected:
+                    code = label.split()[0]
+                    sub = df_yield[df_yield['종목코드'] == code]
+                    fig.add_trace(go.Scatter(x=sub['기준월'], y=sub['Trailing수익률'],
+                                            name=label, mode='lines'))
+                fig.update_layout(height=400, yaxis_title="Trailing 수익률 (%)",
+                                  legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                                  margin=dict(l=0, r=0, t=40, b=0))
+                st.plotly_chart(fig, use_container_width=True)
 
-        # 최신 수익률 테이블
-        latest = df_yield.loc[df_yield.groupby('종목코드')['기준월'].idxmax()]
-        latest_sorted = latest.sort_values('Trailing수익률', ascending=False)
-        show_cols = [c for c in ['종목코드', '종목명', '수정종가', 'T12M배당', 'Trailing수익률'] if c in latest_sorted.columns]
-        st.dataframe(latest_sorted[show_cols].head(30), use_container_width=True)
+            latest = df_yield.loc[df_yield.groupby('종목코드')['기준월'].idxmax()]
+            latest_sorted = latest.sort_values('Trailing수익률', ascending=False)
+            show_cols = [c for c in ['종목코드', '종목명', '수정종가', 'T12M배당', 'Trailing수익률']
+                         if c in latest_sorted.columns]
+            st.dataframe(latest_sorted[show_cols].head(30), use_container_width=True)
+
+        with tab_etf:
+            if df_etf_yield is not None and not df_etf_yield.empty:
+                st.caption("구성종목 수익률을 ETF 포트폴리오 비중으로 가중평균한 Trailing 배당수익률입니다.")
+
+                # ETF 시계열 차트
+                etf_tickers = sorted(df_etf_yield['ETF티커'].unique())
+                selected_etfs = st.multiselect("ETF 선택", etf_tickers, default=etf_tickers[:5])
+                if selected_etfs:
+                    fig2 = go.Figure()
+                    for ticker in selected_etfs:
+                        sub = df_etf_yield[df_etf_yield['ETF티커'] == ticker]
+                        fig2.add_trace(go.Scatter(x=sub['기준월'], y=sub['ETF_Trailing수익률'],
+                                                  name=ticker, mode='lines'))
+                    fig2.update_layout(height=400, yaxis_title="ETF Trailing 수익률 (%)",
+                                       legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                                       margin=dict(l=0, r=0, t=40, b=0))
+                    st.plotly_chart(fig2, use_container_width=True)
+
+                # 최신 ETF 수익률 테이블
+                etf_latest = df_etf_yield.loc[
+                    df_etf_yield.groupby('ETF티커')['기준월'].idxmax()
+                ].sort_values('ETF_Trailing수익률', ascending=False).reset_index(drop=True)
+                st.dataframe(etf_latest, use_container_width=True)
+            else:
+                st.info("ETF 구성종목 매핑 결과가 없습니다. Phase 2를 먼저 실행하세요.")
 
         if st.button("▶️ Phase 5 시작", type="primary"):
             st.session_state.phase = 5

@@ -99,11 +99,16 @@ class TrailingYieldCalculator:
                 continue
 
             # 해당 시점에서 알 수 있는 최신 배당금 결정
-            # 사업보고서는 보통 다음해 3~5월 공시 → 6월 이후 KRX 반영
+            # 사업보고서는 보통 다음해 3~5월 공시 → KRX 반영은 5~7월
+            # 6월 이후: 전년도(year-1) 확정
+            # 1~5월: 원칙상 전전년도(year-2)지만, year-1 데이터가 이미 수집된 경우 사용
             if date.month >= 6:
-                biz_year = date.year - 1  # 해당연도에 반영된 건 전년도 사업보고서
+                biz_year = date.year - 1
             else:
-                biz_year = date.year - 2  # 1~5월에는 전전년도 기준
+                # year-1 데이터가 있으면 사용(일찍 반영된 경우), 없으면 year-2
+                biz_year = date.year - 1
+                if self._div_map.get((code, biz_year)) is None:
+                    biz_year = date.year - 2
 
             div = self._div_map.get((code, biz_year), 0)
             yld = (div / price * 100) if div > 0 else 0
@@ -175,6 +180,82 @@ def validate_phase4(df_yield):
          f"현재 {enough}개"),
     ]
     return validate_gate("Phase 4", checks)
+
+
+def calc_etf_trailing_yield(holdings_dict, df_yield):
+    """ETF별 Trailing 배당수익률 시계열 계산
+
+    구성종목 수익률을 ETF 포트폴리오 비중으로 가중평균하여 ETF 레벨 수익률을 산출한다.
+
+    Args:
+        holdings_dict: {etf_ticker: [(종목명, 종목코드, 비중%), ...]}
+                       Phase 2에서 생성된 ETF 구성종목 + 비중 딕셔너리
+        df_yield: Phase 4 calc_all() 결과 — stock-level trailing yield DataFrame
+                  컬럼: [기준월, 종목코드, Trailing수익률, ...]
+
+    Returns:
+        DataFrame [기준월, ETF티커, ETF_Trailing수익률, 커버리지]
+        커버리지: 가중평균에 사용된 비중 합계 (0~1, 1이면 전 종목 커버)
+    """
+    if df_yield.empty or not holdings_dict:
+        return pd.DataFrame()
+
+    print(f"\n  → ETF Trailing 수익률 집계: {len(holdings_dict)}개 ETF")
+
+    # 종목코드 × 기준월 피벗 (마지막 값 사용)
+    pivot = df_yield.pivot_table(
+        index='기준월', columns='종목코드', values='Trailing수익률', aggfunc='last'
+    )
+
+    results = []
+    for etf_ticker, holdings in holdings_dict.items():
+        # holdings: [(종목명, 종목코드, 비중%), ...]
+        total_w = sum(w for _, _, w in holdings)
+        if total_w <= 0:
+            continue
+
+        for date in pivot.index:
+            weighted = 0.0
+            covered_w = 0.0
+            for _, stock_code, weight in holdings:
+                if stock_code not in pivot.columns:
+                    continue
+                y = pivot.at[date, stock_code]
+                if pd.isna(y):
+                    continue
+                norm_w = weight / total_w
+                weighted += y * norm_w
+                covered_w += norm_w
+
+            # 커버리지 50% 미만이면 신뢰도 낮아 제외
+            if covered_w < 0.5:
+                continue
+
+            # 누락 종목 비중만큼 재정규화
+            etf_yield = weighted / covered_w
+            results.append({
+                '기준월': date,
+                'ETF티커': etf_ticker,
+                'ETF_Trailing수익률': round(etf_yield, 4),
+                '커버리지': round(covered_w, 3),
+            })
+
+    if not results:
+        print("  ⚠️ ETF Trailing 수익률 계산 결과 없음 (구성종목 매핑 부족)")
+        return pd.DataFrame()
+
+    df_etf = pd.DataFrame(results)
+    n_etf = df_etf['ETF티커'].nunique()
+    n_months = df_etf['기준월'].nunique()
+    print(f"  → {n_etf}개 ETF × {n_months}개월 시계열")
+
+    # 최신 ETF 수익률 상위 출력
+    latest = df_etf.loc[df_etf.groupby('ETF티커')['기준월'].idxmax()]
+    top = latest.sort_values('ETF_Trailing수익률', ascending=False).head(5)
+    for _, row in top.iterrows():
+        print(f"     {row['ETF티커']}: {row['ETF_Trailing수익률']:.2f}% (커버리지 {row['커버리지']:.0%})")
+
+    return df_etf
 
 
 if __name__ == "__main__":

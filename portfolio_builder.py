@@ -132,7 +132,7 @@ class PortfolioBuilder:
         summaries = []
         for method in ['yield_weighted', 'equal', 'cap_weighted']:
             df, summary = self.build(method)
-            results[method] = df
+            results[method] = (df, summary)   # tuple로 저장 — save_outputs과 일치
             summary['방법론'] = method
             summaries.append(summary)
 
