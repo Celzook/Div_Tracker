@@ -166,7 +166,7 @@ def render_phase0():
                         st.metric("삼성전자 주당배당금",
                                   f"{sec.iloc[0]['주당배당금']:,}원",
                                   f"배당수익률 {sec.iloc[0]['배당수익률']}%")
-                    st.dataframe(df.head(10), use_container_width=True)
+                    st.dataframe(df.head(10), width='stretch')
 
                     # name_to_code 매핑 구축 (KRX)
                     collector = DividendCollector()
@@ -211,7 +211,7 @@ def render_phase0():
                                             name='삼성전자', line=dict(width=1)))
                     fig.update_layout(height=300, margin=dict(l=0, r=0, t=30, b=0),
                                       yaxis_title="종가 (원)")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
                 else:
                     st.warning(f"⚠️ 데이터 부족: {len(prices)}일")
 
@@ -263,20 +263,20 @@ def render_phase1():
         col1, col2 = st.columns([2, 1])
         with col1:
             show_cols = [c for c in ['ETF명', '시가총액(억원)', '종가', '중카테고리'] if c in df_div.columns]
-            st.dataframe(df_div[show_cols], use_container_width=True, height=400)
+            st.dataframe(df_div[show_cols], width='stretch', height=400)
         with col2:
             if '중카테고리' in df_div.columns:
                 cat_cnt = df_div['중카테고리'].value_counts()
                 fig = px.pie(values=cat_cnt.values, names=cat_cnt.index,
                              title="중카테고리 분포")
                 fig.update_layout(height=350, margin=dict(l=0, r=0, t=40, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
         # 커버드콜 참고
         df_cc = st.session_state.df_covered_call
         if df_cc is not None and not df_cc.empty:
             with st.expander(f"📋 커버드콜 ETF 참고 리스트 ({len(df_cc)}개)"):
-                st.dataframe(df_cc[['ETF명']].head(20), use_container_width=True)
+                st.dataframe(df_cc[['ETF명']].head(20), width='stretch')
 
         # Gate 1
         if len(df_div) >= 10:
@@ -361,7 +361,7 @@ def render_phase2():
     us = st.session_state.unique_stocks
     if us is not None and not us.empty:
         st.success(f"✅ 고유 종목: **{len(us)}개** (ETF {len(st.session_state.holdings_dict or {})}개)")
-        st.dataframe(us.head(30), use_container_width=True, height=400)
+        st.dataframe(us.head(30), width='stretch', height=400)
 
         if len(us) >= 10:
             if st.button("▶️ Phase 3 시작", type="primary"):
@@ -438,7 +438,7 @@ def render_phase3(start_year, end_year):
         # 피벗 테이블
         pivot = df_div.pivot_table(index=['종목코드', '종목명'], columns='사업연도',
                                     values='주당배당금_수정', aggfunc='first')
-        st.dataframe(pivot, use_container_width=True, height=400)
+        st.dataframe(pivot, width='stretch', height=400)
 
         # 삼성전자 검증
         sec = df_div[df_div['종목코드'] == '005930'].sort_values('사업연도')
@@ -515,13 +515,13 @@ def render_phase4():
                 fig.update_layout(height=400, yaxis_title="Trailing 수익률 (%)",
                                   legend=dict(orientation="h", yanchor="bottom", y=1.02),
                                   margin=dict(l=0, r=0, t=40, b=0))
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
             latest = df_yield.loc[df_yield.groupby('종목코드')['기준월'].idxmax()]
             latest_sorted = latest.sort_values('Trailing수익률', ascending=False)
             show_cols = [c for c in ['종목코드', '종목명', '수정종가', 'T12M배당', 'Trailing수익률']
                          if c in latest_sorted.columns]
-            st.dataframe(latest_sorted[show_cols].head(30), use_container_width=True)
+            st.dataframe(latest_sorted[show_cols].head(30), width='stretch')
 
         with tab_etf:
             if df_etf_yield is not None and not df_etf_yield.empty:
@@ -539,13 +539,13 @@ def render_phase4():
                     fig2.update_layout(height=400, yaxis_title="ETF Trailing 수익률 (%)",
                                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
                                        margin=dict(l=0, r=0, t=40, b=0))
-                    st.plotly_chart(fig2, use_container_width=True)
+                    st.plotly_chart(fig2, width='stretch')
 
                 # 최신 ETF 수익률 테이블
                 etf_latest = df_etf_yield.loc[
                     df_etf_yield.groupby('ETF티커')['기준월'].idxmax()
                 ].sort_values('ETF_Trailing수익률', ascending=False).reset_index(drop=True)
-                st.dataframe(etf_latest, use_container_width=True)
+                st.dataframe(etf_latest, width='stretch')
             else:
                 st.info("ETF 구성종목 매핑 결과가 없습니다. Phase 2를 먼저 실행하세요.")
 
@@ -614,7 +614,7 @@ def render_phase5(total):
                 show_cols = [c for c in ['종목코드', '종목명', '수정종가', 'Trailing수익률',
                                          '목표비중', '매수주수', '실투자금액', '실제비중']
                              if c in df_p.columns]
-                st.dataframe(df_p[show_cols], use_container_width=True, height=400)
+                st.dataframe(df_p[show_cols], width='stretch', height=400)
 
                 # 비중 차트
                 if '종목명' in df_p.columns and '실제비중' in df_p.columns:
@@ -623,7 +623,7 @@ def render_phase5(total):
                                  title=f"종목별 비중 (Top 15)",
                                  labels={'실제비중': '비중', '종목명': ''})
                     fig.update_layout(height=350, margin=dict(l=0, r=0, t=40, b=0))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width='stretch')
 
         if st.button("▶️ Phase 6 시작", type="primary"):
             st.session_state.phase = 6
@@ -670,7 +670,7 @@ def render_phase6():
                              "밴드불가(σ작음)": "#d3d3d3"},
                          title="신호 분포")
             fig.update_layout(height=300, margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
         # 매수 신호 종목
         buy = diagnosis[diagnosis['신호'].isin(['매수', '강력매수'])].sort_values(
@@ -680,11 +680,11 @@ def render_phase6():
             show_cols = [c for c in ['종목코드', '종목명', '현재가', '현재수익률',
                                      '5Y평균', 'σ', 'Z-Score', '신호', '배당성장률%']
                          if c in buy.columns]
-            st.dataframe(buy[show_cols], use_container_width=True, height=300)
+            st.dataframe(buy[show_cols], width='stretch', height=300)
 
         # 전체 진단표
         with st.expander("📋 전체 종목 진단표"):
-            st.dataframe(diagnosis, use_container_width=True, height=500)
+            st.dataframe(diagnosis, width='stretch', height=500)
 
         # Z-Score 분포 차트
         valid = diagnosis[diagnosis['Z-Score'].notna()]
@@ -696,7 +696,7 @@ def render_phase6():
                                    "중립": "#7f7f7f", "매도/회피": "#1f77b4"},
                                title="Z-Score 분포")
             fig.update_layout(height=350, margin=dict(l=0, r=0, t=40, b=0))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     # 백테스트 결과
     if backtest is not None and not backtest.empty:
@@ -711,7 +711,7 @@ def render_phase6():
                     st.caption(f"**{h}개월**: 평균 {avg:+.1f}%, 승률 {wr:.0f}% ({len(valid)}건)")
 
         with st.expander("📋 백테스트 상세"):
-            st.dataframe(backtest, use_container_width=True, height=400)
+            st.dataframe(backtest, width='stretch', height=400)
 
     if diagnosis is not None and not diagnosis.empty:
         st.success("🎉 Phase 6 완료! 전체 파이프라인 종료.")
