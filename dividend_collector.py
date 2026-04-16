@@ -1,6 +1,6 @@
 """
 ETF 고배당 유니버스 — 배당 데이터 수집기 (Phase 0, 3)
-다중 소스 Fallback: KRX → DART → KIND
+다중 소스 Fallback: KRX → pykrx → FinanceDataReader → DART
 """
 
 import pandas as pd
@@ -16,6 +16,108 @@ from config_dividend import (
     SPLIT_EVENTS, DIVIDEND_START_YEAR, DIVIDEND_END_YEAR,
     DART_API_KEY, get_trdDd_for_biz_year,
 )
+
+
+# ============================================================================
+# pykrx / FinanceDataReader fallback 헬퍼
+# ============================================================================
+
+def _pykrx_get_dividend_data(trdDd, mktId='STK'):
+    """pykrx 기반 배당 데이터 조회 (KRX 직접 HTTP 차단 시 fallback)
+
+    pykrx는 data.krx.co.kr와 다른 내부 엔드포인트를 사용하여
+    클라우드 환경에서도 접근 가능한 경우가 있다.
+    """
+    try:
+        from pykrx import stock as pykrx_stock
+    except ImportError:
+        return pd.DataFrame()
+
+    try:
+        market = 'KOSPI' if mktId == 'STK' else 'KOSDAQ'
+        # get_market_fundamental: index=티커, columns=[BPS, PER, PBR, EPS, DIV, DPS]
+        df_fund = pykrx_stock.get_market_fundamental(trdDd, market=market)
+        if df_fund is None or df_fund.empty:
+            return pd.DataFrame()
+
+        df_fund = df_fund.reset_index()
+        ticker_col = '티커' if '티커' in df_fund.columns else df_fund.columns[0]
+
+        # 종목명 일괄 조회
+        ticker_list = df_fund[ticker_col].tolist()
+        names = {}
+        for code in ticker_list:
+            try:
+                names[code] = pykrx_stock.get_market_ticker_name(code) or code
+            except Exception:
+                names[code] = code
+
+        # 종가: get_market_ohlcv
+        df_price = pykrx_stock.get_market_ohlcv(trdDd, market=market)
+        if df_price is not None and not df_price.empty:
+            df_price = df_price.reset_index()
+            price_col = '티커' if '티커' in df_price.columns else df_price.columns[0]
+            price_map = dict(zip(df_price[price_col], df_price.get('종가', df_price.get('Close', pd.Series()))))
+        else:
+            price_map = {}
+
+        rows = []
+        for _, row in df_fund.iterrows():
+            code = row[ticker_col]
+            dps = row.get('DPS', 0)
+            div = row.get('DIV', 0.0)
+            try:
+                dps = int(float(str(dps).replace(',', '')))
+            except (ValueError, TypeError):
+                dps = 0
+            try:
+                div = float(str(div).replace(',', ''))
+            except (ValueError, TypeError):
+                div = 0.0
+            rows.append({
+                '종목코드': code,
+                '종목명': names.get(code, code),
+                '종가': price_map.get(code, 0),
+                '주당배당금': dps,
+                '배당수익률': div,
+            })
+
+        df = pd.DataFrame(rows)
+        print(f"  → pykrx fallback: {len(df)}개 종목 ({market})")
+        return df
+
+    except Exception as e:
+        print(f"  ⚠️ pykrx 배당 조회 실패: {e}")
+        return pd.DataFrame()
+
+
+def _fdr_build_name_code_map():
+    """FinanceDataReader 기반 종목명↔코드 매핑 (KRX 차단 시 fallback)"""
+    try:
+        import FinanceDataReader as fdr
+    except ImportError:
+        print("  ⚠️ FinanceDataReader 미설치 (pip install finance-datareader)")
+        return {}
+
+    name_to_code = {}
+    for market in ['KOSPI', 'KOSDAQ']:
+        try:
+            df = fdr.StockListing(market)
+            if df.empty:
+                continue
+            # 컬럼명 버전별 대응
+            code_col = next((c for c in ['Code', 'Symbol'] if c in df.columns), None)
+            name_col = next((c for c in ['Name', 'ISU_ABBRV'] if c in df.columns), None)
+            if not code_col or not name_col:
+                print(f"  ⚠️ FDR {market} 컬럼 불명확: {df.columns.tolist()}")
+                continue
+            for _, row in df[[code_col, name_col]].dropna().iterrows():
+                name_to_code[str(row[name_col]).strip()] = str(row[code_col]).strip()
+        except Exception as e:
+            print(f"  ⚠️ FDR {market} 실패: {e}")
+
+    print(f"  → FDR 매핑: {len(name_to_code)}개 종목")
+    return name_to_code
 
 
 # ============================================================================
@@ -169,10 +271,21 @@ class DividendCollector:
                     print("  ✅ KRX 배당 데이터 소스 검증 통과!")
                 else:
                     print("  ⚠️ 삼성전자 주당배당금 = 0 (사업보고서 미반영 시점일 수 있음)")
+                    # pykrx fallback 시도
+                    df_pykrx = _pykrx_get_dividend_data(trdDd, 'STK')
+                    if not df_pykrx.empty:
+                        result['krx'] = True
+                        print("  ✅ pykrx fallback 검증 통과!")
             else:
                 print("  ⚠️ 삼성전자(005930) 미발견")
         else:
-            print("  ❌ KRX에서 데이터를 가져오지 못함")
+            print("  ❌ KRX에서 데이터를 가져오지 못함 — pykrx fallback 시도...")
+            df_pykrx = _pykrx_get_dividend_data(trdDd, 'STK')
+            if not df_pykrx.empty:
+                result['krx'] = True
+                print(f"  ✅ pykrx fallback 성공 ({len(df_pykrx)}개 종목)")
+            else:
+                print("  ❌ pykrx fallback도 실패. 네트워크 환경을 확인하세요.")
 
         # 2) 연도별 변화 확인 (최소 3개 연도)
         if result['krx']:
@@ -218,7 +331,9 @@ class DividendCollector:
     # ── Phase 0: 종목명→코드 매핑 테이블 ───────────────────
 
     def build_name_code_map(self, base_date):
-        """KRX 전종목 조회 → {종목명: 종목코드} 매핑 테이블 구축"""
+        """KRX 전종목 조회 → {종목명: 종목코드} 매핑 테이블 구축
+        KRX 차단 시 FinanceDataReader로 자동 fallback.
+        """
         print("\n  → 종목명↔코드 매핑 테이블 구축...")
 
         cache_name = f"name_code_map_{base_date}.pkl"
@@ -236,8 +351,14 @@ class DividendCollector:
                     name_to_code[row['종목명']] = row['종목코드']
             time.sleep(0.3)
 
+        # KRX 차단 시 FDR fallback
+        if not name_to_code:
+            print("  → KRX 차단 감지, FDR fallback 시도...")
+            name_to_code = _fdr_build_name_code_map()
+
         self.name_to_code = name_to_code
-        _save_cache(cache_name, name_to_code)
+        if name_to_code:
+            _save_cache(cache_name, name_to_code)
         print(f"  → 매핑 테이블: {len(name_to_code)}개 종목")
         return name_to_code
 
@@ -277,7 +398,7 @@ class DividendCollector:
                 else:
                     print(f"     {mkt_name}: ⚠️ 0개 종목")
 
-                    # Fallback: 다른 월 시도
+                    # Fallback 1: 다른 월 시도
                     for alt_month in ['0801', '0901', '1001', '1101']:
                         alt_trdDd = f'{year + 1}{alt_month}'
                         df = krx_get_dividend_data(alt_trdDd, mktId)
@@ -287,6 +408,16 @@ class DividendCollector:
                             frames_for_year.append(df)
                             print(f"     {mkt_name} (trdDd={alt_trdDd}): {len(df)}개 종목")
                             break
+
+                    # Fallback 2: pykrx (KRX 완전 차단 시)
+                    if df.empty:
+                        print(f"     {mkt_name}: pykrx fallback 시도...")
+                        df = _pykrx_get_dividend_data(trdDd, mktId)
+                        if not df.empty:
+                            df['사업연도'] = year
+                            df['소스'] = 'pykrx'
+                            frames_for_year.append(df)
+                            print(f"     {mkt_name} (pykrx): {len(df)}개 종목")
                 time.sleep(0.5)
 
             if frames_for_year:

@@ -6,3 +6,5 @@ openpyxl
 tqdm
 streamlit
 plotly
+pykrx
+finance-datareader
