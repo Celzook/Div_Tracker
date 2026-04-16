@@ -476,7 +476,17 @@ def krx_get_etf_holdings(ticker, base_date):
         return items[:Config.TOP_N_HOLDINGS]
 
     except Exception:
-        return []
+        pass
+
+    # ── 네이버 금융 fallback (KRX·pykrx 모두 차단 시) ───────
+    try:
+        items = _naver_etf_holdings(ticker)
+        if items:
+            return items[:Config.TOP_N_HOLDINGS]
+    except Exception:
+        pass
+
+    return []
 
 
 # ──────────────────────────────────────────────────────────
