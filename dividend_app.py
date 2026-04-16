@@ -28,10 +28,7 @@ from etf_universe_builder import (
 from config_dividend import (
     SPLIT_EVENTS, DIVIDEND_START_YEAR, DIVIDEND_END_YEAR, get_trdDd_for_biz_year,
 )
-from dividend_collector import (
-    DividendCollector, krx_get_dividend_data, adjust_dividend,
-    _naver_get_dividend_history,
-)
+from dividend_collector import DividendCollector, krx_get_dividend_data, adjust_dividend
 from trailing_yield import TrailingYieldCalculator, calc_etf_trailing_yield
 from portfolio_builder import PortfolioBuilder
 from buy_strategy import BuyStrategy
@@ -414,6 +411,7 @@ def render_phase3(start_year, end_year):
         # ── 네이버 fallback: KRX 완전 차단 시 종목별 개별 수집 ──
         if not all_frames:
             st.warning("⚠️ KRX 응답 없음 — 네이버 금융에서 종목별 배당 이력 수집 중...")
+            from dividend_collector import _naver_get_dividend_history
             target_codes = us['종목코드'].tolist()
             name_map = dict(zip(us['종목코드'], us['종목명']))
             rows = []
