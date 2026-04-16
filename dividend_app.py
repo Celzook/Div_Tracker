@@ -289,10 +289,14 @@ def render_phase2():
         st.warning("Phase 1을 먼저 실행하세요.")
         return
 
+    if collector is None or not collector.name_to_code:
+        st.warning("⚠️ 종목명↔코드 매핑 테이블이 없습니다. Phase 0의 'KRX 테스트 실행'을 먼저 완료하세요.")
+        return
+
     if st.button("📄 구성종목 추출", type="primary"):
         base_date = st.session_state.base_date
         Config.TOP_N_HOLDINGS = 30
-        n2c = collector.name_to_code if collector else {}
+        n2c = collector.name_to_code
         NON_STOCK = ['현금', '원화예금', '달러', 'CASH', '예수금', 'RP', '선물', 'USD']
 
         holdings_dict = {}
@@ -334,7 +338,10 @@ def render_phase2():
         us.index.name = '종목코드'
         if not us.empty:
             us['평균비중'] = us['비중합'] / us['편입ETF수']
-        us = us.reset_index().sort_values('편입ETF수', ascending=False)
+            us = us.reset_index().sort_values('편입ETF수', ascending=False)
+        else:
+            us = pd.DataFrame(columns=['종목코드', '종목명', '편입ETF수', '비중합', '평균비중'])
+            st.warning("⚠️ 구성종목 매핑 결과 없음. Phase 0에서 KRX 데이터 소스를 먼저 검증하세요.")
 
         st.session_state.holdings_dict = holdings_dict
         st.session_state.unique_stocks = us
