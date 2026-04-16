@@ -91,6 +91,65 @@ def _pykrx_get_dividend_data(trdDd, mktId='STK'):
         return pd.DataFrame()
 
 
+def _naver_get_dividend_history(code, start_year=None, end_year=None):
+    """네이버 금융 배당 이력 스크래핑 (KRX 차단 시 fallback)
+    Returns: {사업연도: 주당배당금} dict
+    """
+    import re, io
+    url = f"https://finance.naver.com/item/sise_dividend_total.naver?code={code}"
+    try:
+        html = _http_get(url, encoding='euc-kr', timeout=10)
+        if not html or len(html) < 500:
+            return {}
+
+        # 방법 1: pandas read_html
+        try:
+            tables = pd.read_html(io.StringIO(html))
+            for t in tables:
+                cols_str = ' '.join(str(c) for c in t.columns)
+                if '배당금' in cols_str or '결산' in cols_str:
+                    result = {}
+                    for _, row in t.iterrows():
+                        try:
+                            year = int(str(row.iloc[0])[:4])
+                            if start_year and year < start_year:
+                                continue
+                            if end_year and year > end_year:
+                                continue
+                            dps = int(float(str(row.iloc[1]).replace(',', '').strip()))
+                            if dps > 0:
+                                result[year] = dps
+                        except (ValueError, TypeError):
+                            continue
+                    if result:
+                        return result
+        except Exception:
+            pass
+
+        # 방법 2: regex fallback
+        rows = re.findall(
+            r'(\d{4})\.\d{2}\s*</td>\s*<td[^>]*>\s*([\d,]+)\s*</td>',
+            html, re.DOTALL
+        )
+        result = {}
+        for year_str, dps_str in rows:
+            try:
+                year = int(year_str)
+                if start_year and year < start_year:
+                    continue
+                if end_year and year > end_year:
+                    continue
+                dps = int(dps_str.replace(',', ''))
+                if dps > 0 and year not in result:
+                    result[year] = dps
+            except (ValueError, TypeError):
+                continue
+        return result
+
+    except Exception as e:
+        return {}
+
+
 def _fdr_build_name_code_map():
     """FinanceDataReader 기반 종목명↔코드 매핑 (KRX 차단 시 fallback)"""
     try:

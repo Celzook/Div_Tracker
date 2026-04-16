@@ -30,6 +30,7 @@ from config_dividend import (
 )
 from dividend_collector import (
     DividendCollector, krx_get_dividend_data, adjust_dividend,
+    _naver_get_dividend_history,
 )
 from trailing_yield import TrailingYieldCalculator, calc_etf_trailing_yield
 from portfolio_builder import PortfolioBuilder
@@ -410,8 +411,31 @@ def render_phase3(start_year, end_year):
 
         progress.empty()
 
+        # ── 네이버 fallback: KRX 완전 차단 시 종목별 개별 수집 ──
         if not all_frames:
-            st.error("배당 데이터 수집 실패")
+            st.warning("⚠️ KRX 응답 없음 — 네이버 금융에서 종목별 배당 이력 수집 중...")
+            target_codes = us['종목코드'].tolist()
+            name_map = dict(zip(us['종목코드'], us['종목명']))
+            rows = []
+            progress2 = st.progress(0, text="네이버 배당 이력 수집 중...")
+            for i, code in enumerate(target_codes):
+                hist = _naver_get_dividend_history(code, start_year, end_year)
+                for year, dps in hist.items():
+                    rows.append({
+                        '종목코드': code,
+                        '종목명': name_map.get(code, code),
+                        '사업연도': year,
+                        '주당배당금': dps,
+                        '소스': 'Naver',
+                    })
+                progress2.progress((i + 1) / len(target_codes),
+                                   text=f"네이버 수집 {i+1}/{len(target_codes)}")
+            progress2.empty()
+            if rows:
+                all_frames.append(pd.DataFrame(rows))
+
+        if not all_frames:
+            st.error("배당 데이터 수집 실패 (KRX·네이버 모두 응답 없음)")
             return
 
         df_all = pd.concat(all_frames, ignore_index=True)
