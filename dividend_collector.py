@@ -92,61 +92,70 @@ def _pykrx_get_dividend_data(trdDd, mktId='STK'):
 
 
 def _naver_get_dividend_history(code, start_year=None, end_year=None):
-    """네이버 금융 배당 이력 스크래핑 (KRX 차단 시 fallback)
-    Returns: {사업연도: 주당배당금} dict
+    """네이버 금융 종목 메인 페이지에서 연간 주당배당금 스크래핑 (KRX 차단 시 fallback)
+
+    네이버 금융 기업실적분석 테이블에서 최근 연간 실적 3개년 주당배당금 추출.
+    - URL: https://finance.naver.com/item/main.naver?code={code} (UTF-8)
+    - 테이블: summary="기업실적분석" — 최근 연간 실적 4열 (마지막은 추정치(E), 제외)
+    - sise_dividend_total.naver URL은 404로 제거됨 (2024년 이후 폐지)
+
+    Returns: {사업연도(int): 주당배당금(int)} dict, 예: {2023: 1444, 2024: 1446, 2025: 1668}
     """
-    import re, io
-    url = f"https://finance.naver.com/item/sise_dividend_total.naver?code={code}"
+    import re
+    url = f"https://finance.naver.com/item/main.naver?code={code}"
     try:
-        html = _http_get(url, encoding='euc-kr', timeout=10)
-        if not html or len(html) < 500:
+        # main.naver는 UTF-8 응답 (euc-kr 아님)
+        html = _http_get(url, encoding='utf-8', timeout=15)
+        if not html or len(html) < 1000:
             return {}
 
-        # 방법 1: pandas read_html
-        try:
-            tables = pd.read_html(io.StringIO(html))
-            for t in tables:
-                cols_str = ' '.join(str(c) for c in t.columns)
-                if '배당금' in cols_str or '결산' in cols_str:
-                    result = {}
-                    for _, row in t.iterrows():
-                        try:
-                            year = int(str(row.iloc[0])[:4])
-                            if start_year and year < start_year:
-                                continue
-                            if end_year and year > end_year:
-                                continue
-                            dps = int(float(str(row.iloc[1]).replace(',', '').strip()))
-                            if dps > 0:
-                                result[year] = dps
-                        except (ValueError, TypeError):
-                            continue
-                    if result:
-                        return result
-        except Exception:
-            pass
-
-        # 방법 2: regex fallback
-        rows = re.findall(
-            r'(\d{4})\.\d{2}\s*</td>\s*<td[^>]*>\s*([\d,]+)\s*</td>',
+        # 기업실적분석 테이블 추출
+        table_match = re.search(
+            r'(최근 연간 실적.*?</table>)',
             html, re.DOTALL
         )
+        if not table_match:
+            return {}
+        table_html = table_match.group(1)
+
+        # 연간 컬럼 헤더에서 연도 추출 (YYYY.MM 형식, 앞 4개가 연간)
+        all_years = re.findall(r'(\d{4})\.\d{2}', table_html)
+        if len(all_years) < 4:
+            return {}
+        # 마지막 연간 컬럼(4번째)은 추정치(E) → 제외, 앞 3개만 사용
+        annual_year_strs = all_years[:3]
+
+        # 주당배당금 행 추출
+        dps_row_match = re.search(r'주당배당금.{0,3000}?</tr>', table_html, re.DOTALL)
+        if not dps_row_match:
+            return {}
+        row_html = dps_row_match.group()
+
+        # td 셀에서 숫자 값 추출 (콤마 포함 숫자, 첫 9개 중 앞 3개가 연간 확정치)
+        td_values = re.findall(
+            r'<td[^>]*>(?:\s*(?:<[^>]+>)*\s*)*([\d,]+)(?:\s*(?:<[^>]+>)*\s*)*</td>',
+            row_html
+        )
+        if not td_values:
+            return {}
+
+        # 연도↔배당금 매핑 (확정 연간 3개년)
         result = {}
-        for year_str, dps_str in rows:
+        for year_str, val_str in zip(annual_year_strs, td_values[:3]):
             try:
                 year = int(year_str)
                 if start_year and year < start_year:
                     continue
                 if end_year and year > end_year:
                     continue
-                dps = int(dps_str.replace(',', ''))
-                if dps > 0 and year not in result:
+                dps = int(val_str.replace(',', ''))
+                if dps > 0:
                     result[year] = dps
             except (ValueError, TypeError):
                 continue
         return result
 
-    except Exception as e:
+    except Exception:
         return {}
 
 
