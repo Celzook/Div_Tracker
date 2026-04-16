@@ -447,6 +447,35 @@ def krx_get_etf_holdings(ticker, base_date):
         return items[:Config.TOP_N_HOLDINGS]
 
     except Exception:
+        pass
+
+    # ── pykrx fallback ───────────────────────────────────────
+    try:
+        from pykrx import stock as pykrx_stock
+        df_pdf = pykrx_stock.get_etf_portfolio_deposit_file(ticker, base_date)
+        if df_pdf is None or df_pdf.empty:
+            return []
+
+        # 컬럼명 버전별 대응
+        name_col = next((c for c in ['종목명', 'Name', 'ISU_NM'] if c in df_pdf.columns), None)
+        weight_col = next((c for c in ['비중', 'Weight', 'COMPST_RTO'] if c in df_pdf.columns), None)
+        if not name_col or not weight_col:
+            return []
+
+        items = []
+        for _, row in df_pdf.iterrows():
+            sn = str(row[name_col]).strip()
+            try:
+                w = float(str(row[weight_col]).replace(',', ''))
+            except (ValueError, TypeError):
+                w = 0.0
+            if w > 0 and sn:
+                items.append((sn[:20], round(w, 2)))
+
+        items.sort(key=lambda x: x[1], reverse=True)
+        return items[:Config.TOP_N_HOLDINGS]
+
+    except Exception:
         return []
 
 
