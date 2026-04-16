@@ -161,19 +161,18 @@ def render_phase0():
 
                 if not df.empty:
                     sec = df[df['종목코드'] == '005930']
-                    st.success(f"✅ 전종목 {len(df)}개 조회 (trdDd={trdDd})")
+                    st.success(f"✅ KRX 전종목 {len(df)}개 조회 (trdDd={trdDd})")
                     if not sec.empty:
                         st.metric("삼성전자 주당배당금",
                                   f"{sec.iloc[0]['주당배당금']:,}원",
                                   f"배당수익률 {sec.iloc[0]['배당수익률']}%")
                     st.dataframe(df.head(10), use_container_width=True)
 
-                    # name_to_code 매핑 구축
+                    # name_to_code 매핑 구축 (KRX)
                     collector = DividendCollector()
                     n2c = {}
                     for _, row in df.iterrows():
                         n2c[row['종목명']] = row['종목코드']
-                    # 코스닥도
                     df_ksq = cached_krx_dividend(trdDd, 'KSQ')
                     if not df_ksq.empty:
                         for _, row in df_ksq.iterrows():
@@ -183,7 +182,20 @@ def render_phase0():
                     st.session_state.base_date = trdDd
                     st.session_state.gate0_ok = True
                 else:
-                    st.error("❌ KRX 응답 없음. 네트워크 환경을 확인하세요.")
+                    st.warning("⚠️ KRX 응답 없음 — FinanceDataReader fallback 시도 중...")
+                    from dividend_collector import _fdr_build_name_code_map
+                    n2c = _fdr_build_name_code_map()
+                    if n2c:
+                        collector = DividendCollector()
+                        collector.name_to_code = n2c
+                        from etf_universe_builder import find_latest_business_date
+                        base = find_latest_business_date()
+                        st.session_state.collector = collector
+                        st.session_state.base_date = base
+                        st.session_state.gate0_ok = True
+                        st.success(f"✅ FDR fallback 성공: {len(n2c)}개 종목 매핑 완료")
+                    else:
+                        st.error("❌ KRX·FDR 모두 실패. 네트워크 환경을 확인하세요.")
 
     with col2:
         st.subheader("📈 네이버 주가 데이터")

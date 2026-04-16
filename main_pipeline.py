@@ -140,8 +140,7 @@ def run_pipeline():
     g0 = collector.verify_source()
     gate_log.append(f"Phase 0: KRX={g0['krx']}, DART={g0['dart']}")
     if not g0['krx']:
-        print("\n⚠️ KRX 접속 불가. 로컬 환경에서 재실행하세요.")
-        return
+        print("\n⚠️ KRX 직접 조회 불가 — pykrx/FDR fallback으로 계속 진행합니다.")
 
     base_date = Config.BASE_DATE or find_latest_business_date()
     Config.BASE_DATE = base_date
